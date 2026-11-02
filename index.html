@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Consulta RUC SUNAT - Plataforma Web</title>
+    <!-- Librería XLSX para leer y generar archivos Excel en el navegador -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #f3f4f6; color: #1f2937; padding: 30px 15px; }
+        .container { max-width: 1050px; margin: 0 auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); padding: 25px; }
+        h1 { font-size: 24px; color: #1e3a8a; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+        .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 18px; margin-bottom: 20px; }
+        .card-title { font-weight: 600; font-size: 16px; margin-bottom: 12px; color: #374151; }
+        .grid-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media(max-width: 768px) { .grid-inputs { grid-template-columns: 1fr; } }
+        textarea { width: 100%; height: 95px; border: 1px solid #d1d5db; border-radius: 6px; padding: 10px; font-family: monospace; resize: vertical; }
+        input[type="file"] { width: 100%; padding: 10px; border: 1px dashed #9ca3af; border-radius: 6px; background: #fff; cursor: pointer; }
+        .btn-group { display: flex; gap: 12px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
+        button { cursor: pointer; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; font-size: 14px; transition: all 0.2s; }
+        .btn-primary { background: #2563eb; color: #fff; }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+        .btn-success { background: #059669; color: #fff; }
+        .btn-success:hover { background: #047857; }
+        .btn-success:disabled { background: #a7f3d0; cursor: not-allowed; }
+        #status { font-style: italic; color: #4b5563; font-size: 14px; }
+        .table-responsive { overflow-x: auto; margin-top: 15px; border-radius: 6px; border: 1px solid #e5e7eb; max-height: 450px; }
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+        th { background: #1e3a8a; color: #fff; padding: 12px; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; position: sticky; top: 0; }
+        td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
+        tr:nth-child(even) { background-color: #f9fafb; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; }
+        .badge-habido { background: #dcfce7; color: #166534; }
+        .badge-nohabido { background: #fee2e2; color: #991b1b; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🇵🇪 Automatización de Consulta RUC - SUNAT</h1>
+
+        <div class="card">
+            <div class="card-title">1. Origen de Datos (RUCs)</div>
+            <div class="grid-inputs">
+                <div>
+                    <label style="display:block; font-size: 13px; margin-bottom: 6px; font-weight: 500;">Ingreso Manual (separados por enter, coma o espacio):</label>
+                    <textarea id="txtManual" placeholder="Ej: 20100130204, 20100070970"></textarea>
+                </div>
+                <div>
+                    <label style="display:block; font-size: 13px; margin-bottom: 6px; font-weight: 500;">O Cargar Archivo Excel (.xlsx / .xls):</label>
+                    <input type="file" id="fileExcel" accept=".xlsx, .xls">
+                    <p style="font-size: 11px; color: #6b7280; margin-top: 6px;">Detecta automáticamente cualquier celda con 11 dígitos, con o sin encabezados.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn-primary" id="btnConsultar" onclick="iniciarProceso()">▶ Iniciar Consulta</button>
+            <button class="btn-success" id="btnDescargar" onclick="descargarExcel()" disabled>💾 Descargar Reporte en Excel</button>
+            <span id="status">Listo para consultar.</span>
+        </div>
+
+        <div class="card">
+            <div class="card-title">2. Resultados Extraídos (<span id="count">0</span>)</div>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 120px; text-align: center;">RUC</th>
+                            <th>Razón Social</th>
+                            <th style="width: 110px; text-align: center;">Condición</th>
+                            <th style="width: 120px; text-align: center;">F. Inicio Act.</th>
+                            <th>Dirección Fiscal</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbodyResultados">
+                        <tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 25px;">No hay datos para mostrar</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let rucsExcelCargados = [];
+        let resultadosGlobales = [];
+
+        // Leer archivo Excel directamente en el navegador con SheetJS (sin backend)
+        document.getElementById('fileExcel').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const data = new Uint8Array(evt.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                const rucsSet = new Set();
+                rows.forEach(row => {
+                    row.forEach(cell => {
+                        const cellStr = String(cell || '').trim();
+                        const matches = cellStr.match(/\b\d{11}\b/g);
+                        if (matches) {
+                            matches.forEach(r => rucsSet.add(r));
+                        }
+                    });
+                });
+
+                rucsExcelCargados = Array.from(rucsSet);
+                document.getElementById('status').innerText = `Excel cargado: ${rucsExcelCargados.length} RUCs válidos detectados.`;
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function obtenerTodosLosRucs() {
+            const manualText = document.getElementById('txtManual').value;
+            const matchesManual = manualText.match(/\b\d{11}\b/g) || [];
+            const combinados = new Set([...rucsExcelCargados, ...matchesManual]);
+            return Array.from(combinados);
+        }
+
+        // Generador del token emulado de sunatrecaptcha3.js
+        function generarKeySunat(longitud = 34) {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let res = '';
+            for (let i = 0; i < longitud; i++) {
+                res += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return res;
+        }
+
+        // Consulta a través de un proxy CORS para evitar el bloqueo del navegador
+        async function consultarRucEnWeb(ruc) {
+            const targetUrl = 'https://e-consultaruc.sunat.gob.pe/cl-ti-itmrconsruc/jcrS00Alias';
+            const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(targetUrl);
+
+            const formData = new URLSearchParams();
+            formData.append('accion', 'consPorRuc');
+            formData.append('nroRuc', ruc);
+            formData.append('contexto', 'ti-it');
+            formData.append('modo', '1');
+            formData.append('rbtnTipo', '1');
+            formData.append('search1', ruc);
+            formData.append('codigo', '');
+            formData.append('tipdoc', '1');
+            formData.append('token', generarKeySunat(34));
+
+            try {
+                const response = await fetch(proxyUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: formData.toString()
+                });
+
+                const html = await response.text();
+
+                // Parsear datos del HTML
+                let razon = '-';
+                const desMatch = html.match(/<input\s+type="hidden"\s+name="desRuc"\s+value="([^"]+)"/i);
+                if (desMatch) {
+                    razon = desMatch[1].trim();
+                } else {
+                    const h4Match = html.match(/<h4 class="list-group-item-heading">\d{11}\s*-\s*([^<]+)<\/h4>/i);
+                    if (h4Match) razon = h4Match[1].trim();
+                }
+
+                let condicion = '-';
+                const cMatch = html.match(/Condici[oó\W]+n.*?<p class="list-group-item-text">\s*([^<]+?)\s*<\/p>/is);
+                if (cMatch) {
+                    const cTxt = cMatch[1].toUpperCase();
+                    condicion = cTxt.includes('NO HABIDO') ? 'NO HABIDO' : (cTxt.includes('HABIDO') ? 'HABIDO' : cTxt.trim());
+                }
+
+                let fechaInicio = '-';
+                const fMatch = html.match(/Fecha de Inicio de Actividades:.*?<p class="list-group-item-text">\s*([0-9\/]+)\s*<\/p>/is);
+                if (fMatch) fechaInicio = fMatch[1].trim();
+
+                let direccion = '-';
+                const dMatch = html.match(/Domicilio Fiscal:.*?<p class="list-group-item-text">\s*([^<]+?)\s*<\/p>/is);
+                if (dMatch) direccion = dMatch[1].replace(/\s+/g, ' ').trim();
+
+                return { ruc, razon_social: razon, condicion, fecha_inicio: fechaInicio, direccion };
+            } catch (err) {
+                return { ruc, razon_social: 'ERROR / CORS PROXY', condicion: '-', fecha_inicio: '-', direccion: err.message };
+            }
+        }
+
+        async function iniciarProceso() {
+            const rucs = obtenerTodosLosRucs();
+            if (rucs.length === 0) {
+                alert('Ingresa al menos un RUC válido de 11 dígitos o carga un archivo Excel.');
+                return;
+            }
+
+            const btnConsultar = document.getElementById('btnConsultar');
+            const btnDescargar = document.getElementById('btnDescargar');
+            const status = document.getElementById('status');
+            const tbody = document.getElementById('tbodyResultados');
+
+            btnConsultar.disabled = true;
+            btnDescargar.disabled = true;
+            tbody.innerHTML = '';
+            resultadosGlobales = [];
+            document.getElementById('count').innerText = '0';
+
+            for (let i = 0; i < rucs.length; i++) {
+                const ruc = rucs[i];
+                status.innerText = `Consultando [${i + 1}/${rucs.length}]: ${ruc}...`;
+
+                const item = await consultarRucEnWeb(ruc);
+                resultadosGlobales.push(item);
+
+                const tr = document.createElement('tr');
+                const condClass = item.condicion === 'HABIDO' ? 'badge-habido' : (item.condicion.includes('NO') ? 'badge-nohabido' : '');
+                tr.innerHTML = `
+                    <td style="text-align: center; font-weight: 600;">${item.ruc}</td>
+                    <td>${item.razon_social}</td>
+                    <td style="text-align: center;"><span class="badge ${condClass}">${item.condicion}</span></td>
+                    <td style="text-align: center;">${item.fecha_inicio}</td>
+                    <td>${item.direccion}</td>
+                `;
+                tbody.appendChild(tr);
+                document.getElementById('count').innerText = resultadosGlobales.length;
+            }
+
+            status.innerText = `Finalizado (${rucs.length} RUCs procesados).`;
+            btnConsultar.disabled = false;
+            btnDescargar.disabled = false;
+        }
+
+        function descargarExcel() {
+            if (resultadosGlobales.length === 0) return;
+
+            const datosExcel = resultadosGlobales.map((item, idx) => ({
+                "N°": idx + 1,
+                "RUC": item.ruc,
+                "Razón Social": item.razon_social,
+                "Condición Contribuyente": item.condicion,
+                "Fecha Inicio Actividades": item.fecha_inicio,
+                "Dirección Fiscal": item.direccion
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(datosExcel);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Consulta_RUC");
+
+            XLSX.writeFile(wb, "Reporte_Consulta_RUC_SUNAT.xlsx");
+        }
+    </script>
+</body>
+</html>
